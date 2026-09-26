@@ -644,7 +644,7 @@ class Verity(gl.Contract):
                 "repo_url": job.artifact.repo_url,
                 "commit_hash": job.artifact.commit_hash,
                 "test_command": job.artifact.test_command,
-                "requirements": job.artifact.requirements,
+                "requirements": list(job.artifact.requirements),
                 "deadline": int(job.deadline),
                 "recorded": job.recorded,
                 "verdict": job.verdict,

@@ -1,5 +1,6 @@
 """Tests for agent registration and stake management."""
 
+import json
 from tests.direct.conftest import to_hex
 
 
@@ -12,11 +13,10 @@ def test_register_sets_stake(direct_vm, direct_deploy, direct_alice):
     contract.register()
 
     rec = contract.get_agent(alice)
-    import json
     data = json.loads(rec)
     assert data["exists"] is True
     assert data["staked"] == 100
-    assert data["tier"] == "UNVERIFIED"  # no completed jobs yet
+    assert data["tier"] == "UNVERIFIED"
 
 
 def test_register_is_idempotent_adds_stake(direct_vm, direct_deploy, direct_alice):
@@ -30,7 +30,6 @@ def test_register_is_idempotent_adds_stake(direct_vm, direct_deploy, direct_alic
     contract.register()
 
     rec = contract.get_agent(alice)
-    import json
     data = json.loads(rec)
     assert data["staked"] == 150
 
@@ -53,7 +52,6 @@ def test_register_requires_value(direct_vm, direct_deploy, direct_alice):
 def test_unregistered_agent_has_default_view(direct_deploy):
     contract = direct_deploy("contracts/verity.py")
     rec = contract.get_agent("0xdeadbeef1234567890abcdef1234567890abcdef")
-    import json
     data = json.loads(rec)
     assert data["exists"] is False
     assert data["tier"] == "UNVERIFIED"
@@ -64,9 +62,9 @@ def test_trusted_tier_after_stake_and_passes(direct_vm, direct_deploy, direct_al
     contract = direct_deploy("contracts/verity.py")
     alice = to_hex(direct_alice)
 
-    # Register with high stake
+    # Register with high stake (5x min_stake = 5 GEN for TRUSTED tier)
     direct_vm.sender = direct_alice
-    direct_vm.value = 1000
+    direct_vm.value = 5000000000000000000
     contract.register()
 
     # Mock a passing verification
@@ -89,8 +87,7 @@ def test_trusted_tier_after_stake_and_passes(direct_vm, direct_deploy, direct_al
     contract.verify("job1")
 
     rec = contract.get_agent(alice)
-    import json
     data = json.loads(rec)
     assert data["completed"] == 1
     assert data["avg_score"] > 0
-    assert data["tier"] == "TRUSTED"  # high stake + good score
+    assert data["tier"] == "TRUSTED"

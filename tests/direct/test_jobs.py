@@ -1,5 +1,6 @@
 """Tests for job posting validation."""
 
+import json
 from tests.direct.conftest import to_hex, scorecard_dict
 
 
@@ -19,15 +20,14 @@ def test_post_job_stores_artifact(direct_vm, direct_deploy, direct_alice):
     )
 
     job = contract.get_job("job1")
-    import json
     data = json.loads(job)
     assert data["job_id"] == "job1"
     assert data["agent"] == alice
     assert data["repo_url"] == "https://example.com/repo"
     assert data["commit_hash"] == "abc123"
     assert data["test_command"] == "pytest -x"
-    assert data["status"] == "PENDING"
-    assert data["verdict"] is None
+    assert data["recorded"] is False
+    assert data["verdict"] == ""
 
 
 def test_post_job_rejects_duplicate_job_id(direct_vm, direct_deploy, direct_alice):
@@ -99,7 +99,7 @@ def test_post_job_rejects_past_deadline(direct_vm, direct_deploy, direct_alice):
             commit_hash="abc123",
             test_command="true",
             requirements=[],
-            deadline=100,  # far in the past
+            deadline=100,
         )
     except Exception as e:
         msg = str(e)
@@ -124,7 +124,6 @@ def test_post_job_prevents_duplicate_artifact_review(direct_vm, direct_deploy, d
         deadline=9999999999,
     )
 
-    # Same repo + same commit → rejected
     try:
         contract.post_job(
             job_id="job-artifact-2",
@@ -167,8 +166,7 @@ def test_post_job_different_commits_allowed(direct_vm, direct_deploy, direct_ali
         deadline=9999999999,
     )
 
-    # Both should exist
-    j1 = contract.get_job("job-v1")
-    j2 = contract.get_job("job-v2")
-    assert json.loads(j1)["job_id"] == "job-v1"
-    assert json.loads(j2)["job_id"] == "job-v2"
+    j1 = json.loads(contract.get_job("job-v1"))
+    j2 = json.loads(contract.get_job("job-v2"))
+    assert j1["job_id"] == "job-v1"
+    assert j2["job_id"] == "job-v2"
