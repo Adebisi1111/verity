@@ -6,6 +6,7 @@ deliverables across 4 dimensions using a **single AI consensus round**.
 ```
 Contract address (Studio Net): 0xe719DccFF8353a6410347e1c2D081667219654Eb
 Deploy tx: 0x153814e609ebd95fa84a2b2b3cd3177ae22ff9f16deb9ba25877d35c6b74514a
+Explorer: https://explorer-studio.genlayer.com/address/0xe719DccFF8353a6410347e1c2D081667219654Eb
 ```
 
 ## What it does
@@ -161,7 +162,12 @@ echo "your_password" | genlayer deploy \
 
 ## Contract address
 
-**Studio Net:** `0xE319bD232a8F00D7B058136ad8966d1DCaE1D6f7`
+**Studio Net:** `0xe719DccFF8353a6410347e1c2D081667219654Eb`
+
+## Explorer
+
+**Contract:** https://explorer-studio.genlayer.com/address/0xe719DccFF8353a6410347e1c2D081667219654Eb
+**Deploy TX:** https://explorer-studio.genlayer.com/tx/0x153814e609ebd95fa84a2b2b3cd3177ae22ff9f16deb9ba25877d35c6b74514a
 
 ## File structure
 
