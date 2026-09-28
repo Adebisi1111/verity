@@ -4,9 +4,9 @@ A standalone GenLayer Intelligent Contract primitive that evaluates work
 deliverables across 4 dimensions using a **single AI consensus round**.
 
 ```
-Contract address (Studio Net): 0xe719DccFF8353a6410347e1c2D081667219654Eb
-Deploy tx: 0x153814e609ebd95fa84a2b2b3cd3177ae22ff9f16deb9ba25877d35c6b74514a
-Explorer: https://explorer-studio.genlayer.com/address/0xe719DccFF8353a6410347e1c2D081667219654Eb
+Contract address (Studio Net): 0xde9a5B2393A675CF6b45899BDfD4A3f0ebf58Ef2
+Deploy tx: 0x850be666948c4d5f16d633c9ca79b2486f4cf3f72560756b89025351245e5276
+Explorer: https://explorer-studio.genlayer.com/contract/0xde9a5B2393A675CF6b45899BDfD4A3f0ebf58Ef2
 ```
 
 ## What it does
