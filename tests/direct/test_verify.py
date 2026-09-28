@@ -37,6 +37,7 @@ def test_verify_pass_updates_reputation(direct_vm, direct_deploy, direct_alice):
         test_command="pytest",
         requirements=["must have tests"],
         deadline=9999999999,
+        files=[],
     )
     verdict = contract.verify("pass-job")
     assert verdict == "PASS"
@@ -67,6 +68,7 @@ def test_verify_partial_no_slash(direct_vm, direct_deploy, direct_alice):
         test_command="pytest",
         requirements=["must have tests"],
         deadline=9999999999,
+        files=[],
     )
     verdict = contract.verify("partial-job")
     assert verdict == "PARTIAL"
@@ -96,6 +98,7 @@ def test_verify_fail_applies_slash(direct_vm, direct_deploy, direct_alice):
         test_command="pytest",
         requirements=["must have tests"],
         deadline=9999999999,
+        files=[],
     )
     verdict = contract.verify("fail-job")
     assert verdict == "FAIL"
@@ -127,6 +130,7 @@ def test_verify_stores_scorecard(direct_vm, direct_deploy, direct_alice):
         test_command="pytest",
         requirements=["must have tests"],
         deadline=9999999999,
+        files=[],
     )
     contract.verify("sc-job")
 
@@ -161,6 +165,7 @@ def test_verify_records_job_as_done(direct_vm, direct_deploy, direct_alice):
         test_command="true",
         requirements=[],
         deadline=9999999999,
+        files=[],
     )
     contract.verify("done-job")
 
@@ -197,6 +202,7 @@ def test_only_agent_or_issuer_before_deadline(direct_vm, direct_deploy, direct_a
         test_command="true",
         requirements=[],
         deadline=9999999999,
+        files=[],
     )
 
     # Bob (agent) can verify before deadline
@@ -218,6 +224,7 @@ def test_only_agent_or_issuer_before_deadline(direct_vm, direct_deploy, direct_a
         test_command="true",
         requirements=[],
         deadline=9999999999,
+        files=[],
     )
     _mock_llm_for(
         scorecard_dict(functional=90, quality=90, security=90, completeness=90),
@@ -238,6 +245,7 @@ def test_unverified_job_has_no_scorecard(direct_deploy, direct_alice):
         test_command="true",
         requirements=[],
         deadline=9999999999,
+        files=[],
     )
 
     sc = contract.get_scorecard("unverified")

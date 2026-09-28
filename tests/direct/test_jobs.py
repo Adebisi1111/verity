@@ -17,6 +17,7 @@ def test_post_job_stores_artifact(direct_vm, direct_deploy, direct_alice):
         test_command="pytest -x",
         requirements=["must have README", "must pass tests"],
         deadline=9999999999,
+        files=[],
     )
 
     job = contract.get_job("job1")
@@ -43,6 +44,7 @@ def test_post_job_rejects_duplicate_job_id(direct_vm, direct_deploy, direct_alic
         test_command="true",
         requirements=[],
         deadline=9999999999,
+        files=[],
     )
 
     try:
@@ -54,6 +56,7 @@ def test_post_job_rejects_duplicate_job_id(direct_vm, direct_deploy, direct_alic
             test_command="true",
             requirements=[],
             deadline=9999999999,
+            files=[],
         )
     except Exception as e:
         msg = str(e)
@@ -77,6 +80,7 @@ def test_post_job_rejects_non_http_url(direct_vm, direct_deploy, direct_alice):
             test_command="true",
             requirements=[],
             deadline=9999999999,
+            files=[],
         )
     except Exception as e:
         msg = str(e)
@@ -100,6 +104,7 @@ def test_post_job_rejects_past_deadline(direct_vm, direct_deploy, direct_alice):
             test_command="true",
             requirements=[],
             deadline=100,
+            files=[],
         )
     except Exception as e:
         msg = str(e)
@@ -122,6 +127,7 @@ def test_post_job_prevents_duplicate_artifact_review(direct_vm, direct_deploy, d
         test_command="true",
         requirements=[],
         deadline=9999999999,
+        files=[],
     )
 
     try:
@@ -133,6 +139,7 @@ def test_post_job_prevents_duplicate_artifact_review(direct_vm, direct_deploy, d
             test_command="true",
             requirements=[],
             deadline=9999999999,
+            files=[],
         )
     except Exception as e:
         msg = str(e)
@@ -155,6 +162,7 @@ def test_post_job_different_commits_allowed(direct_vm, direct_deploy, direct_ali
         test_command="true",
         requirements=[],
         deadline=9999999999,
+        files=[],
     )
     contract.post_job(
         job_id="job-v2",
@@ -164,6 +172,7 @@ def test_post_job_different_commits_allowed(direct_vm, direct_deploy, direct_ali
         test_command="true",
         requirements=[],
         deadline=9999999999,
+        files=[],
     )
 
     j1 = json.loads(contract.get_job("job-v1"))

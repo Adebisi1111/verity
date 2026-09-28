@@ -83,6 +83,7 @@ def test_trusted_tier_after_stake_and_passes(direct_vm, direct_deploy, direct_al
         test_command="pytest",
         requirements=["must have tests", "must handle errors"],
         deadline=9999999999,
+        files=[],
     )
     contract.verify("job1")
 

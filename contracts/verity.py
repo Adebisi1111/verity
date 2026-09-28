@@ -81,7 +81,7 @@ SEE ALSO
 """
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 from genlayer import *  # noqa: F401, F403
@@ -123,12 +123,19 @@ class AgentRecord:
 @allow_storage
 @dataclass
 class CodeArtifact:
-    """What we are verifying."""
+    """What we are verifying.
+
+    The contract retrieves the ACTUAL code files from the repository at the
+    given commit via gl.nondet.web.render, then includes their contents in the
+    evaluation prompt.  The AI model judges the real code, not just a URL.
+    """
 
     repo_url: str
     commit_hash: str
     test_command: str
     requirements: DynArray[str]
+    files: DynArray[str]
+    test_results_url: str
 
 
 @allow_storage
@@ -299,37 +306,97 @@ class Verity(gl.Contract):
     # Single non-deterministic evaluation flow
     # ------------------------------------------------------------------
 
-    def _evaluate(self, repo_url: str, commit_hash: str, test_command: str, requirements: DynArray[str]) -> dict:
+    def _evaluate(self, repo_url: str, commit_hash: str, test_command: str, requirements: DynArray[str], files: DynArray[str], test_results_url: str) -> dict:
         """Score 4 dimensions in a SINGLE exec_prompt call.
 
-        This is the ONLY non-deterministic operation in the contract.
-        Validators re-run this same function and compare every stored score.
+        The contract retrieves the ACTUAL code files from the repository at the
+        given commit via gl.nondet.web.render, then includes their contents in
+        the evaluation prompt.  The AI model judges the real code, not just a
+        URL string.  If test_results_url is provided, test results are also
+        fetched and included.
         """
+        # ---- Acquire the immutable artifact on-chain ----
+        # Try to fetch actual code files from GitHub
+        file_contents = []
+        if len(files) > 0:
+            raw_base = self._github_raw_base(repo_url, commit_hash)
+            if raw_base:
+                for f in files:
+                    file_url = raw_base + f
+                    try:
+                        content = gl.nondet.web.render(file_url, mode="text")
+                        if content:
+                            file_contents.append(f"--- {f} ---\n{content[:4000]}")
+                    except Exception:
+                        pass
+
+        # Fall back to fetching the repo URL directly if no files retrieved
+        if not file_contents:
+            try:
+                artifact_content = gl.nondet.web.render(repo_url, mode="text")
+                if artifact_content:
+                    file_contents.append(f"--- repo page ---\n{artifact_content[:4000]}")
+            except Exception:
+                pass
+
+        artifact_content = "\n\n".join(file_contents) if file_contents else ""
+
+        # Acquire test results if provided
+        test_results = ""
+        if test_results_url:
+            try:
+                test_results = gl.nondet.web.render(test_results_url, mode="text")
+                if test_results:
+                    test_results = f"\n\nTest Results:\n{test_results[:3000]}"
+            except Exception:
+                pass
+
         reqs_text = "\n".join(f"- {r}" for r in requirements)
 
-        prompt = (
-            f"Evaluate this work deliverable across 4 dimensions.\n\n"
-            f"Artifact URL: {repo_url}\n"
-            f"Commit: {commit_hash}\n"
-            f"Test command: {test_command}\n"
-            f"Requirements:\n{reqs_text}\n\n"
-            f"Evaluate these 4 dimensions:\n\n"
-            f"1. FUNCTIONAL CORRECTNESS (weight {self.weight_functional}%): "
-            f"Does the deliverable work? Are there tests? "
-            f"Do they cover main functionality? Any obvious runtime errors?\n\n"
-            f"2. CODE QUALITY (weight {self.weight_quality}%): "
-            f"Is it well-organized? Docstrings? Descriptive names? "
-            f"Reasonable complexity? Config files present?\n\n"
-            f"3. SECURITY (weight {self.weight_security}%): "
-            f"Hardcoded secrets? Input validation? Injection vulnerabilities? "
-            f"Access control? Standard crypto libraries?\n\n"
-            f"4. COMPLETENESS (weight {self.weight_completeness}%): "
-            f"Are all requirements implemented? Edge cases handled?\n\n"
-            f"Respond as JSON exactly:\n"
-            f'{{\"functional\": 0-100, \"quality\": 0-100, '
-            f'\"security\": 0-100, \"completeness\": 0-100, '
-            f'\"reasoning\": \"brief explanation\"}}'
-        )
+        JSON_OUT = '{"functional": 0-100, "quality": 0-100, "security": 0-100, "completeness": 0-100, "reasoning": "brief explanation"}'
+        if artifact_content:
+            prompt = (
+                f"Evaluate this work deliverable across 4 dimensions.\n\n"
+                f"Artifact files ({repo_url}@{commit_hash}):\n{artifact_content}\n"
+                f"Test command: {test_command}{test_results}\n"
+                f"Requirements:\n{reqs_text}\n\n"
+                f"Evaluate these 4 dimensions:\n\n"
+                f"1. FUNCTIONAL CORRECTNESS (weight {self.weight_functional}%): "
+                f"Does the deliverable work? Are there tests? "
+                f"Do they cover main functionality? Any obvious runtime errors?\n\n"
+                f"2. CODE QUALITY (weight {self.weight_quality}%): "
+                f"Is it well-organized? Docstrings? Descriptive names? "
+                f"Reasonable complexity? Config files present?\n\n"
+                f"3. SECURITY (weight {self.weight_security}%): "
+                f"Hardcoded secrets? Input validation? Injection vulnerabilities? "
+                f"Access control? Standard crypto libraries?\n\n"
+                f"4. COMPLETENESS (weight {self.weight_completeness}%): "
+                f"Are all requirements implemented? Edge cases handled?\n\n"
+                f"Respond as JSON exactly:\n"
+                f"{JSON_OUT}"
+            )
+        else:
+            prompt = (
+                f"Evaluate this work deliverable across 4 dimensions.\n\n"
+                f"Artifact URL: {repo_url}\n"
+                f"Commit: {commit_hash}\n"
+                f"Test command: {test_command}{test_results}\n"
+                f"Requirements:\n{reqs_text}\n\n"
+                f"Evaluate these 4 dimensions:\n\n"
+                f"1. FUNCTIONAL CORRECTNESS (weight {self.weight_functional}%): "
+                f"Does the deliverable work? Are there tests? "
+                f"Do they cover main functionality? Any obvious runtime errors?\n\n"
+                f"2. CODE QUALITY (weight {self.weight_quality}%): "
+                f"Is it well-organized? Docstrings? Descriptive names? "
+                f"Reasonable complexity? Config files present?\n\n"
+                f"3. SECURITY (weight {self.weight_security}%): "
+                f"Hardcoded secrets? Input validation? Injection vulnerabilities? "
+                f"Access control? Standard crypto libraries?\n\n"
+                f"4. COMPLETENESS (weight {self.weight_completeness}%): "
+                f"Are all requirements implemented? Edge cases handled?\n\n"
+                f"Respond as JSON exactly:\n"
+                f"{JSON_OUT}"
+            )
 
         res = gl.nondet.exec_prompt(prompt, response_format="json")
 
@@ -349,6 +416,28 @@ class Verity(gl.Contract):
             "overall": overall,
             "verdict": verdict,
         }
+
+    def _github_raw_base(self, repo_url: str, commit_hash: str) -> str:
+        """Convert a GitHub repo URL to a raw file base URL.
+
+        Example: https://github.com/user/repo → https://raw.githubusercontent.com/user/repo/{commit_hash}/
+        """
+        try:
+            # Remove trailing slash
+            url = repo_url.rstrip("/")
+            # Must be a GitHub URL
+            if not url.startswith("https://github.com/"):
+                return ""
+            # Extract user/repo from path
+            path = url[len("https://github.com/"):]
+            parts = path.split("/")
+            if len(parts) < 2:
+                return ""
+            user = parts[0]
+            repo = parts[1]
+            return f"https://raw.githubusercontent.com/{user}/{repo}/{commit_hash}/"
+        except Exception:
+            return ""
 
     def _verify(self, proposed: dict, mine: dict) -> bool:
         """Compare EVERY stored score AND the verdict between leader and validator.
@@ -372,7 +461,7 @@ class Verity(gl.Contract):
         except (KeyError, TypeError):
             return False
 
-    def _run_consensus(self, repo_url: str, commit_hash: str, test_command: str, requirements: DynArray[str]) -> dict:
+    def _run_consensus(self, repo_url: str, commit_hash: str, test_command: str, requirements: DynArray[str], files: DynArray[str], test_results_url: str) -> dict:
         """Run the single non-deterministic consensus round.
 
         Returns the agreed scorecard dict: functional, quality, security,
@@ -380,7 +469,7 @@ class Verity(gl.Contract):
         """
 
         def leader_work() -> dict:
-            return self._evaluate(repo_url, commit_hash, test_command, requirements)
+            return self._evaluate(repo_url, commit_hash, test_command, requirements, files, test_results_url)
 
         def validator(leaders_res: Any) -> bool:
             if not isinstance(leaders_res, gl.vm.Return):
@@ -460,6 +549,8 @@ class Verity(gl.Contract):
         test_command: str,
         requirements: DynArray[str],
         deadline: int,
+        files: DynArray[str],
+        test_results_url: str = "",
     ) -> None:
         """Issuer posts a verification job for an agent's deliverable.
 
@@ -468,6 +559,11 @@ class Verity(gl.Contract):
         - repo_url must be http(s).
         - The same (repo_url, commit_hash) pair cannot be reviewed twice.
         - deadline must be in the future.
+        - files: list of file paths to retrieve from the repo at the commit
+          (e.g. ["src/main.py", "tests/test_main.py"]).  If empty, the
+          contract falls back to fetching the repo URL directly.
+        - test_results_url: optional URL to fetch test results (e.g. a CI
+          report).  If provided, the results are included in the evaluation.
         """
         sender = str(gl.message.sender_address)
         if not job_id:
@@ -490,6 +586,8 @@ class Verity(gl.Contract):
                 commit_hash=commit_hash,
                 test_command=test_command,
                 requirements=requirements,
+                files=files,
+                test_results_url=test_results_url,
             ),
             deadline=u256(deadline),
             recorded=False,
@@ -529,6 +627,8 @@ class Verity(gl.Contract):
             job.artifact.commit_hash,
             job.artifact.test_command,
             job.artifact.requirements,
+            job.artifact.files,
+            job.artifact.test_results_url,
         )
 
         scorecard = Scorecard(
