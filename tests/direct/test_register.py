@@ -85,6 +85,7 @@ def test_trusted_tier_after_stake_and_passes(direct_vm, direct_deploy, direct_al
         deadline=9999999999,
         files=[],
     )
+    contract.accept_job("job1")
     contract.verify("job1")
 
     rec = contract.get_agent(alice)

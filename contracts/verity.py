@@ -118,6 +118,11 @@ class AgentRecord:
     slashed_count: u256
     slashed_total: u256
     total_score: u256
+    active: bool
+    pending_withdraw: u256
+    withdraw_nonce: u256
+    settled_withdrawals: u256
+    slashed_pool: u256
 
 
 @allow_storage
@@ -164,6 +169,9 @@ class Job:
     recorded: bool
     verdict: str
     final_score: u256
+    accepted: bool
+    accepted_terms: str
+    cancelled: bool
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +193,7 @@ class Verity(gl.Contract):
     jobs: TreeMap[str, Job]
     verifications: TreeMap[str, Scorecard]
     reviewed: TreeMap[str, str]
+    slashed_sink: u256
 
     # ---- deploy-time tunables (set from constructor args) ----
 
@@ -238,6 +247,42 @@ class Verity(gl.Contract):
         self.min_stake = min_stake_wei
 
     # ------------------------------------------------------------------
+    # Artifact keys and acceptance terms
+    # ------------------------------------------------------------------
+
+    def _artifact_key(self, repo_url: str, commit_hash: str) -> str:
+        """Canonical key for an immutable artifact."""
+        return f"{repo_url.strip().lower()}@{commit_hash.strip().lower()}"
+
+    def _terms_digest(self, job: Job) -> str:
+        """Digest of every term the agent is accepting.
+
+        Acceptance is only meaningful if it provably covers the artifact, the
+        requirements, the deadline AND the slashing exposure. Binding all four
+        into one digest means the issuer cannot alter any of them after the
+        agent accepted without invalidating what was agreed to.
+        """
+        return str(
+            hash(
+                json.dumps(
+                    {
+                        "artifact": self._artifact_key(
+                            job.artifact.repo_url, job.artifact.commit_hash
+                        ),
+                        "files": list(job.artifact.files),
+                        "test_command": job.artifact.test_command,
+                        "requirements": list(job.artifact.requirements),
+                        "test_results_url": job.artifact.test_results_url,
+                        "deadline": int(job.deadline),
+                        "slash_percent": int(self.slash_percent),
+                        "min_stake": int(self.min_stake),
+                    },
+                    sort_keys=True,
+                )
+            )
+        )
+
+    # ------------------------------------------------------------------
     # Time
     # ------------------------------------------------------------------
 
@@ -268,15 +313,24 @@ class Verity(gl.Contract):
         return "NEW"
 
     def _apply_slash(self, rec: AgentRecord) -> AgentRecord:
-        """Burn slash_percent of remaining stake (floored at 0)."""
+        """Burn slash_percent of remaining stake into this agent's slashed pool.
+
+        The burned wei is NOT silently destroyed. It moves from `staked` into
+        `slashed_pool`, which is readable on-chain and must be explicitly
+        disposed via dispose_slashed(). That keeps contract custody reconciled
+        with the stake ledger: every wei is staked, reserved, or in a pool.
+        """
         staked = int(rec.staked)
         slash_pct = int(self.slash_percent)
         slash = (staked * slash_pct) // 100
         if slash > staked:
             slash = staked
         rec.staked = u256(staked - slash)
+        rec.slashed_pool += u256(slash)
         rec.slashed_count += u256(1)
-        rec.slashed_total = u256(int(rec.slashed_total) + slash)
+        rec.slashed_total += u256(slash)
+        if int(rec.staked) < int(self.min_stake):
+            rec.active = False
         return rec
 
     def _final_score(self, functional: int, quality: int, security: int, completeness: int) -> int:
@@ -532,6 +586,11 @@ class Verity(gl.Contract):
                 slashed_count=u256(0),
                 slashed_total=u256(0),
                 total_score=u256(0),
+                active=True,
+                pending_withdraw=u256(0),
+                withdraw_nonce=u256(0),
+                settled_withdrawals=u256(0),
+                slashed_pool=u256(0),
             )
         value = gl.message.value
         if int(value) == 0:
@@ -572,9 +631,12 @@ class Verity(gl.Contract):
             raise gl.vm.UserError(f"Job {job_id} already exists")
         if not repo_url.startswith("http"):
             raise gl.vm.UserError("repo_url must be http(s)")
-        key = f"{repo_url}:{commit_hash}"
+        key = self._artifact_key(repo_url, commit_hash)
         if self.reviewed.get(key, "") == "1":
             raise gl.vm.UserError(f"Artifact {repo_url}@{commit_hash} already reviewed")
+        # The key is NOT reserved here. Reserving at post time let anyone burn
+        # artifact keys forever by posting jobs they never intend to verify.
+        # It is reserved only when a job is actually verified.
         if deadline <= self._now():
             raise gl.vm.UserError("deadline must be in the future")
 
@@ -593,8 +655,67 @@ class Verity(gl.Contract):
             recorded=False,
             verdict="",
             final_score=u256(0),
+            accepted=False,
+            accepted_terms="",
+            cancelled=False,
         )
-        self.reviewed[key] = "1"
+
+    @gl.public.write
+    def accept_job(self, job_id: str) -> str:
+        """The NAMED agent accepts a job, binding themselves to its terms.
+
+        Until this is called the job cannot touch the agent's reputation or
+        stake in any way - not a slash, not a failed count, not a reputation
+        tier change. An issuer naming an address is a request, not an
+        obligation.
+
+        Acceptance covers the artifact, the requirements, the deadline and the
+        slashing exposure together (see _terms_digest). Terms are frozen at
+        this point: the issuer cannot later edit a job and keep the acceptance.
+        """
+        sender = str(gl.message.sender_address)
+        job = self.jobs.get(job_id, None)
+        if job is None:
+            raise gl.vm.UserError(f"Job {job_id} not found")
+        if job.cancelled:
+            raise gl.vm.UserError(f"Job {job_id} was cancelled")
+        if job.recorded:
+            raise gl.vm.UserError(f"Job {job_id} already verified")
+        if sender != job.agent:
+            raise gl.vm.UserError("Only the named agent may accept this job")
+        if job.accepted:
+            raise gl.vm.UserError(f"Job {job_id} is already accepted")
+
+        rec = self.agents.get(sender, None)
+        if rec is None:
+            raise gl.vm.UserError("Agent not registered")
+        # Accepting work that can slash you is only meaningful if there is
+        # something to slash. Requiring a positive stake stops a stake-free
+        # address from accepting unlimited obligations it cannot back.
+        if int(rec.staked) <= 0:
+            raise gl.vm.UserError("Agent has no stake; cannot accept slashed work")
+
+        job.accepted = True
+        job.accepted_terms = self._terms_digest(job)
+        self.jobs[job_id] = job
+        return job.accepted_terms
+
+    @gl.public.write
+    def decline_job(self, job_id: str) -> None:
+        """The named agent refuses a job. No reputation or stake effect."""
+        sender = str(gl.message.sender_address)
+        job = self.jobs.get(job_id, None)
+        if job is None:
+            raise gl.vm.UserError(f"Job {job_id} not found")
+        if job.recorded:
+            raise gl.vm.UserError(f"Job {job_id} already verified")
+        if sender != job.agent and sender != job.issuer:
+            raise gl.vm.UserError("Only the named agent or the issuer may decline")
+        if job.accepted:
+            raise gl.vm.UserError("Cannot decline a job already accepted")
+        job.cancelled = True
+        job.verdict = "CANCELLED"
+        self.jobs[job_id] = job
 
     @gl.public.write
     def verify(self, job_id: str) -> str:
@@ -609,6 +730,17 @@ class Verity(gl.Contract):
             raise gl.vm.UserError(f"Job {job_id} not found")
         if job.recorded:
             raise gl.vm.UserError(f"Job {job_id} already verified")
+        if job.cancelled:
+            raise gl.vm.UserError(f"Job {job_id} was cancelled")
+        if not job.accepted:
+            raise gl.vm.UserError(
+                "Job not accepted by the named agent; it cannot affect "
+                "reputation or stake"
+            )
+        if job.accepted_terms != self._terms_digest(job):
+            raise gl.vm.UserError(
+                "Job terms changed after acceptance; acceptance is void"
+            )
 
         now = self._now()
         expired = now >= int(job.deadline)
@@ -657,6 +789,11 @@ class Verity(gl.Contract):
         job.final_score = u256(result["overall"])
         self.jobs[job_id] = job
         self.agents[job.agent] = rec
+        # Reserve the artifact key ONLY now, when real verification consumed
+        # it. Posting a job no longer burns the key.
+        self.reviewed[
+            self._artifact_key(job.artifact.repo_url, job.artifact.commit_hash)
+        ] = "1"
 
         return result["verdict"]
 
@@ -671,13 +808,31 @@ class Verity(gl.Contract):
             raise gl.vm.UserError(f"Job {job_id} not found")
         if job.recorded:
             raise gl.vm.UserError(f"Job {job_id} already verified")
+        if job.cancelled:
+            raise gl.vm.UserError(f"Job {job_id} was already declined")
         if self._now() < int(job.deadline):
             raise gl.vm.UserError("Deadline has not passed yet")
+
+        # An agent who never accepted the job cannot be slashed for not
+        # completing it. The job simply expires: no reputation change, no
+        # stake change, and the artifact key is left free for a real job.
+        if not job.accepted:
+            job.cancelled = True
+            job.verdict = "EXPIRED_UNACCEPTED"
+            self.jobs[job_id] = job
+            return "EXPIRED_UNACCEPTED"
+
+        if job.accepted_terms != self._terms_digest(job):
+            raise gl.vm.UserError(
+                "Job terms changed after acceptance; acceptance is void"
+            )
 
         rec = self.agents.get(job.agent, None)
         if rec is None:
             raise gl.vm.UserError("Agent not registered")
 
+        # Accepted, then abandoned: a real obligation was broken, so this is a
+        # real slash. Acceptance is what makes it legitimate.
         rec.failed += u256(1)
         rec = self._apply_slash(rec)
         job.recorded = True
@@ -689,8 +844,136 @@ class Verity(gl.Contract):
         return "FAIL"
 
     # ------------------------------------------------------------------
+    # Custody lifecycle: withdraw, deactivate, dispose
+    # ------------------------------------------------------------------
+
+    @gl.public.write
+    def deactivate(self) -> None:
+        """Voluntary one-way exit, so all remaining stake can leave.
+
+        Irreversible by design: there is no activate(), so a departed agent can
+        never return to the verified set or re-qualify with withdrawn stake.
+        """
+        sender = str(gl.message.sender_address)
+        rec = self.agents.get(sender, None)
+        if rec is None:
+            raise gl.vm.UserError("Agent not registered")
+        if not rec.active:
+            raise gl.vm.UserError("Agent already deactivated")
+        if int(rec.pending_withdraw) > 0:
+            raise gl.vm.UserError("Settle the pending withdrawal before deactivating")
+        rec.active = False
+        self.agents[sender] = rec
+
+    @gl.public.write
+    def request_withdraw(self, amount: int) -> int:
+        """Phase 1: reserve stake and return a nonce.
+
+        The reservation is taken out of `staked` immediately, so a reserved
+        amount can never also be slashed by a concurrent job.
+        """
+        sender = str(gl.message.sender_address)
+        rec = self.agents.get(sender, None)
+        if rec is None:
+            raise gl.vm.UserError("Agent not registered")
+        if amount <= 0:
+            raise gl.vm.UserError("Withdrawal amount must be positive")
+        if int(rec.pending_withdraw) > 0:
+            raise gl.vm.UserError("A withdrawal is already pending")
+        if amount > int(rec.staked):
+            raise gl.vm.UserError("Amount exceeds staked balance")
+        # An ACTIVE agent must keep its security up. Once deactivated (or
+        # slashed into inactivity) the floor no longer applies, so nothing is
+        # stranded - including stake from an agent who was slashed out.
+        if rec.active and int(rec.staked) - amount < int(self.min_stake):
+            raise gl.vm.UserError("Cannot withdraw below the minimum stake while active")
+
+        rec.staked = u256(int(rec.staked) - amount)
+        rec.pending_withdraw = u256(amount)
+        rec.withdraw_nonce += u256(1)
+        self.agents[sender] = rec
+        return int(rec.withdraw_nonce)
+
+    @gl.public.write
+    def claim_withdraw(self, nonce: int) -> int:
+        """Phase 2: settle the reservation exactly once."""
+        sender = str(gl.message.sender_address)
+        rec = self.agents.get(sender, None)
+        if rec is None:
+            raise gl.vm.UserError("Agent not registered")
+        if int(rec.pending_withdraw) == 0:
+            raise gl.vm.UserError("No pending withdrawal")
+        if nonce != int(rec.withdraw_nonce):
+            raise gl.vm.UserError("Stale nonce")
+
+        amount = int(rec.pending_withdraw)
+        # Zero the reservation BEFORE recording settlement, so a replay in the
+        # same round cannot pay twice.
+        rec.pending_withdraw = u256(0)
+        rec.settled_withdrawals += u256(amount)
+        self.agents[sender] = rec
+        return amount
+
+    @gl.public.write
+    def dispose_slashed(self) -> int:
+        """Move this agent's slashed pool into the network sink.
+
+        Burned value is never silently recycled back into stake - that would
+        let a slashed agent re-qualify for free.
+        """
+        sender = str(gl.message.sender_address)
+        rec = self.agents.get(sender, None)
+        if rec is None:
+            raise gl.vm.UserError("Agent not registered")
+        amount = int(rec.slashed_pool)
+        if amount == 0:
+            raise gl.vm.UserError("Nothing to dispose")
+        rec.slashed_pool = u256(0)
+        self.slashed_sink += u256(amount)
+        self.agents[sender] = rec
+        return amount
+
+    # ------------------------------------------------------------------
     # View methods
     # ------------------------------------------------------------------
+
+    @gl.public.view
+    def get_pending_withdraw(self, agent: Any) -> str:
+        """Custody ledger for one agent - what is owed, slashed and settled."""
+        agent_hex = agent.as_hex if hasattr(agent, "as_hex") else str(agent)
+        rec = self.agents.get(agent_hex, None)
+        if rec is None:
+            return json.dumps(
+                {
+                    "exists": False,
+                    "pending_withdraw": 0,
+                    "withdraw_nonce": 0,
+                    "slashed_pool": 0,
+                    "settled_withdrawals": 0,
+                    "slashed_sink": int(self.slashed_sink),
+                }
+            )
+        return json.dumps(
+            {
+                "exists": True,
+                "pending_withdraw": int(rec.pending_withdraw),
+                "withdraw_nonce": int(rec.withdraw_nonce),
+                "slashed_pool": int(rec.slashed_pool),
+                "settled_withdrawals": int(rec.settled_withdrawals),
+                "slashed_sink": int(self.slashed_sink),
+            }
+        )
+
+    @gl.public.view
+    def get_artifact_key(self, repo_url: str, commit_hash: str) -> str:
+        """Whether an artifact has actually been consumed by a verification."""
+        key = self._artifact_key(repo_url, commit_hash)
+        return json.dumps(
+            {
+                "key": key,
+                "reserved": self.reviewed.get(key, "") == "1",
+            }
+        )
 
     @gl.public.view
     def get_agent(self, agent: Any) -> str:
@@ -708,6 +991,9 @@ class Verity(gl.Contract):
                     "slashed_count": 0,
                     "slashed_total": 0,
                     "total_score": 0,
+                    "active": False,
+                    "pending_withdraw": 0,
+                    "slashed_pool": 0,
                     "tier": "UNVERIFIED",
                     "avg_score": 0,
                 }
@@ -724,6 +1010,9 @@ class Verity(gl.Contract):
                 "slashed_count": int(rec.slashed_count),
                 "slashed_total": int(rec.slashed_total),
                 "total_score": int(rec.total_score),
+                "active": bool(rec.active),
+                "pending_withdraw": int(rec.pending_withdraw),
+                "slashed_pool": int(rec.slashed_pool),
                 "tier": self._tier(rec),
                 "avg_score": avg,
             }
@@ -747,6 +1036,9 @@ class Verity(gl.Contract):
                 "requirements": list(job.artifact.requirements),
                 "deadline": int(job.deadline),
                 "recorded": job.recorded,
+                "accepted": bool(job.accepted),
+                "accepted_terms": job.accepted_terms,
+                "cancelled": bool(job.cancelled),
                 "verdict": job.verdict,
                 "final_score": int(job.final_score),
                 "expired": self._now() >= int(job.deadline),

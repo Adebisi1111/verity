@@ -114,7 +114,13 @@ def test_post_job_rejects_past_deadline(direct_vm, direct_deploy, direct_alice):
     assert "deadline" in msg.lower() or "past" in msg.lower()
 
 
-def test_post_job_prevents_duplicate_artifact_review(direct_vm, direct_deploy, direct_alice):
+def test_artifact_key_is_reserved_only_after_verification(direct_vm, direct_deploy, direct_alice):
+    """Posting alone must NOT burn the artifact key (squattering defence).
+
+    The key is reserved when a job is actually verified, so an issuer cannot
+    post jobs they never intend to verify in order to permanently block those
+    artifacts.
+    """
     contract = direct_deploy("contracts/verity.py")
     alice = to_hex(direct_alice)
 
@@ -130,24 +136,21 @@ def test_post_job_prevents_duplicate_artifact_review(direct_vm, direct_deploy, d
         files=[],
     )
 
-    try:
-        contract.post_job(
-            job_id="job-artifact-2",
-            agent=alice,
-            repo_url="https://example.com/repo",
-            commit_hash="same-commit",
-            test_command="true",
-            requirements=[],
-            deadline=9999999999,
-            files=[],
-        )
-    except Exception as e:
-        msg = str(e)
-    else:
-        msg = None
-    assert msg is not None
-    assert "already reviewed" in msg.lower() or "duplicate" in msg.lower()
+    state = json.loads(contract.get_artifact_key("https://example.com/repo", "same-commit"))
+    assert state["reserved"] is False, state
 
+    # a second job on the same artifact is still allowed pre-verification
+    contract.post_job(
+        job_id="job-artifact-2",
+        agent=alice,
+        repo_url="https://example.com/repo",
+        commit_hash="same-commit",
+        test_command="true",
+        requirements=[],
+        deadline=9999999999,
+        files=[],
+    )
+    assert json.loads(contract.get_job("job-artifact-2"))["exists"] is True
 
 def test_post_job_different_commits_allowed(direct_vm, direct_deploy, direct_alice):
     contract = direct_deploy("contracts/verity.py")
