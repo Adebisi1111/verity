@@ -4,9 +4,9 @@ A standalone GenLayer Intelligent Contract primitive that evaluates work
 deliverables across 4 dimensions using a **single AI consensus round**.
 
 ```
-Contract address (Studio Net): 0xde9a5B2393A675CF6b45899BDfD4A3f0ebf58Ef2
-Deploy tx: 0x850be666948c4d5f16d633c9ca79b2486f4cf3f72560756b89025351245e5276
-Explorer: https://explorer-studio.genlayer.com/contract/0xde9a5B2393A675CF6b45899BDfD4A3f0ebf58Ef2
+Contract address (Studio Net): 0x237C3d0935389756C932DfBBDEEffbfA53b446d1
+Deploy tx: 0x448c6c1c52af1954ec132459c29494723f95004007ae89d50fca3ab65ed4c0b7
+Explorer: https://explorer-studio.genlayer.com/address/0x237C3d0935389756C932DfBBDEEffbfA53b446d1
 ```
 
 ## What it does
@@ -94,15 +94,54 @@ Stake GEN to become a verifiable agent.  Idempotent — adds to existing stake.
 `@gl.public.write`
 Issuer posts a verification job for an agent's deliverable.
 
+**`accept_job(job_id)`** — `@gl.public.write`
+The **named agent** accepts the job, binding itself to the artifact,
+requirements, deadline and slashing exposure together. Only the named agent may
+call. Until this is called the job cannot touch reputation or stake in any
+direction. Returns a digest of every accepted term; the issuer cannot alter the
+job afterwards without voiding the acceptance.
+
+**`decline_job(job_id)`** — `@gl.public.write`
+The named agent (or the issuer) refuses. No reputation or stake effect.
+
 **`verify(job_id)`** — `@gl.public.write`
-Run consensus verification on a job and update reputation + stake.  Before the
-deadline only the agent or issuer may call.  After the deadline anyone may
-call (to settle abandoned jobs).
+Run consensus verification and update reputation + stake. **Refuses any job the
+agent has not accepted**, and refuses if the terms no longer match what was
+accepted. Before the deadline only the agent or issuer may call; after it,
+anyone may.
 
 **`settle_unclaimed(job_id)`** — `@gl.public.write`
-Permissionlessly settle an expired, unverified job as FAIL.
+Settle an expired, unverified job. An **accepted** job that was then abandoned
+is slashed — acceptance is a real obligation. A job that was **never accepted**
+simply expires as `EXPIRED_UNACCEPTED`: no reputation change, no stake change,
+and the artifact key stays free.
+
+**`deactivate()`** — `@gl.public.write`
+Voluntary one-way exit. After it the full remaining stake can be withdrawn.
+Irreversible — there is no `activate()`.
+
+**`request_withdraw(amount)`** — `@gl.public.write`
+Phase 1 of withdrawal: reserves `amount` out of stake and returns a nonce. An
+**active** agent cannot reserve below the minimum stake; once deactivated the
+floor no longer applies, so nothing is stranded.
+
+**`claim_withdraw(nonce)`** — `@gl.public.write`
+Phase 2: settles the reservation exactly once. A stale nonce or a second call
+with nothing pending is refused.
+
+**`dispose_slashed()`** — `@gl.public.write`
+Moves the caller's slashed pool into the network sink. Burned value is never
+recycled back into stake.
 
 ### View methods
+
+**`get_pending_withdraw(agent)`** → JSON
+Custody ledger: pending reservation, nonce, slashed pool, settled total, and
+the network-wide slashed sink.
+
+**`get_artifact_key(repo_url, commit_hash)`** → JSON
+Whether an artifact has actually been consumed by a verification. Keys are
+reserved at verification time, not at post time.
 
 **`get_agent(agent)`** → JSON
 Get an agent's reputation record and tier (UNVERIFIED / NEW / ESTABLISHED / TRUSTED).
@@ -160,14 +199,13 @@ echo "your_password" | genlayer deploy \
   --args 15 15 60 10 70 40 10 1000000000000000000
 ```
 
-## Contract address
-
-**Studio Net:** `0xe719DccFF8353a6410347e1c2D081667219654Eb`
-
 ## Explorer
 
-**Contract:** https://explorer-studio.genlayer.com/address/0xe719DccFF8353a6410347e1c2D081667219654Eb
-**Deploy TX:** https://explorer-studio.genlayer.com/tx/0x153814e609ebd95fa84a2b2b3cd3177ae22ff9f16deb9ba25877d35c6b74514a
+**Contract:** https://explorer-studio.genlayer.com/address/0x237C3d0935389756C932DfBBDEEffbfA53b446d1
+**Deploy TX:** https://explorer-studio.genlayer.com/tx/0x448c6c1c52af1954ec132459c29494723f95004007ae89d50fca3ab65ed4c0b7
+
+Deployed source is byte-identical to `contracts/verity.py`
+(1071 lines, SHA-256 `0e2331c96795a8deea24bbcf…`).
 
 ## File structure
 
