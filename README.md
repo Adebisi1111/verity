@@ -4,9 +4,9 @@ A standalone GenLayer Intelligent Contract primitive that evaluates work
 deliverables across 4 dimensions using a **single AI consensus round**.
 
 ```
-Contract address (Studio Net): 0x237C3d0935389756C932DfBBDEEffbfA53b446d1
-Deploy tx: 0x448c6c1c52af1954ec132459c29494723f95004007ae89d50fca3ab65ed4c0b7
-Explorer: https://explorer-studio.genlayer.com/address/0x237C3d0935389756C932DfBBDEEffbfA53b446d1
+Contract address (Studio Net): 0xe4a1805a47082F1d18a92b039674A43a6DDd50d4
+Deploy tx: 0xca6fbd9fa1e6630e31b06e517fe5c1edbad028974a413c3bc00ae1d41c036316
+Explorer: https://explorer-studio.genlayer.com/address/0xe4a1805a47082F1d18a92b039674A43a6DDd50d4
 ```
 
 ## What it does
@@ -118,12 +118,15 @@ and the artifact key stays free.
 
 **`deactivate()`** — `@gl.public.write`
 Voluntary one-way exit. After it the full remaining stake can be withdrawn.
-Irreversible — there is no `activate()`.
+Irreversible — there is no `activate()`. Refused while an accepted job is
+outstanding.
 
 **`request_withdraw(amount)`** — `@gl.public.write`
 Phase 1 of withdrawal: reserves `amount` out of stake and returns a nonce. An
 **active** agent cannot reserve below the minimum stake; once deactivated the
-floor no longer applies, so nothing is stranded.
+floor no longer applies, so nothing is stranded. Refused entirely while an
+**accepted job is outstanding** — that stake is what a failure would burn, so it
+is encumbered until the job is verified or settled.
 
 **`claim_withdraw(nonce)`** — `@gl.public.write`
 Phase 2: settles the reservation exactly once. A stale nonce or a second call
@@ -201,11 +204,11 @@ echo "your_password" | genlayer deploy \
 
 ## Explorer
 
-**Contract:** https://explorer-studio.genlayer.com/address/0x237C3d0935389756C932DfBBDEEffbfA53b446d1
-**Deploy TX:** https://explorer-studio.genlayer.com/tx/0x448c6c1c52af1954ec132459c29494723f95004007ae89d50fca3ab65ed4c0b7
+**Contract:** https://explorer-studio.genlayer.com/address/0xe4a1805a47082F1d18a92b039674A43a6DDd50d4
+**Deploy TX:** https://explorer-studio.genlayer.com/tx/0xca6fbd9fa1e6630e31b06e517fe5c1edbad028974a413c3bc00ae1d41c036316
 
 Deployed source is byte-identical to `contracts/verity.py`
-(1071 lines, SHA-256 `0e2331c96795a8deea24bbcf…`).
+(1094 lines, SHA-256 `140e966e41ec0fecae8f6c59…`).
 
 ## File structure
 

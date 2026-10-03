@@ -123,6 +123,7 @@ class AgentRecord:
     withdraw_nonce: u256
     settled_withdrawals: u256
     slashed_pool: u256
+    open_jobs: u256
 
 
 @allow_storage
@@ -591,6 +592,7 @@ class Verity(gl.Contract):
                 withdraw_nonce=u256(0),
                 settled_withdrawals=u256(0),
                 slashed_pool=u256(0),
+                open_jobs=u256(0),
             )
         value = gl.message.value
         if int(value) == 0:
@@ -698,6 +700,11 @@ class Verity(gl.Contract):
         job.accepted = True
         job.accepted_terms = self._terms_digest(job)
         self.jobs[job_id] = job
+        # The stake backing an accepted job is ENCUMBERED: it is what a
+        # failure would burn. Counting it here is O(1) and makes the encumbrance
+        # explicit rather than inferred.
+        rec.open_jobs += u256(1)
+        self.agents[sender] = rec
         return job.accepted_terms
 
     @gl.public.write
@@ -788,6 +795,8 @@ class Verity(gl.Contract):
         job.verdict = result["verdict"]
         job.final_score = u256(result["overall"])
         self.jobs[job_id] = job
+        if int(rec.open_jobs) > 0:
+            rec.open_jobs = u256(int(rec.open_jobs) - 1)
         self.agents[job.agent] = rec
         # Reserve the artifact key ONLY now, when real verification consumed
         # it. Posting a job no longer burns the key.
@@ -835,6 +844,8 @@ class Verity(gl.Contract):
         # real slash. Acceptance is what makes it legitimate.
         rec.failed += u256(1)
         rec = self._apply_slash(rec)
+        if int(rec.open_jobs) > 0:
+            rec.open_jobs = u256(int(rec.open_jobs) - 1)
         job.recorded = True
         job.verdict = "FAIL"
         job.final_score = u256(0)
@@ -862,6 +873,10 @@ class Verity(gl.Contract):
             raise gl.vm.UserError("Agent already deactivated")
         if int(rec.pending_withdraw) > 0:
             raise gl.vm.UserError("Settle the pending withdrawal before deactivating")
+        if int(rec.open_jobs) > 0:
+            raise gl.vm.UserError(
+                "Cannot deactivate while an accepted job is outstanding"
+            )
         rec.active = False
         self.agents[sender] = rec
 
@@ -880,6 +895,13 @@ class Verity(gl.Contract):
             raise gl.vm.UserError("Withdrawal amount must be positive")
         if int(rec.pending_withdraw) > 0:
             raise gl.vm.UserError("A withdrawal is already pending")
+        # Accepted jobs encumber the stake that would be burned on failure.
+        # Without this an agent could accept a job, strip the stake behind it,
+        # and be "slashed" nothing.
+        if int(rec.open_jobs) > 0:
+            raise gl.vm.UserError(
+                "Cannot withdraw while an accepted job is outstanding"
+            )
         if amount > int(rec.staked):
             raise gl.vm.UserError("Amount exceeds staked balance")
         # An ACTIVE agent must keep its security up. Once deactivated (or
@@ -1011,6 +1033,7 @@ class Verity(gl.Contract):
                 "slashed_total": int(rec.slashed_total),
                 "total_score": int(rec.total_score),
                 "active": bool(rec.active),
+                "open_jobs": int(rec.open_jobs),
                 "pending_withdraw": int(rec.pending_withdraw),
                 "slashed_pool": int(rec.slashed_pool),
                 "tier": self._tier(rec),

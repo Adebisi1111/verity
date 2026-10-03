@@ -57,6 +57,8 @@ async function j(k, fn, args) {
 async function main() {
   const reg = await write('agent', 'register', [], { value: 3n * GEN });
   check('agent registers with 3 GEN', reg.ok, `exec=${reg.exec}`);
+  const reg2 = await write('other', 'register', [], { value: 3n * GEN });
+  check('second agent registers with 3 GEN', reg2.ok, `exec=${reg2.exec}`);
 
   const post = (k, jid, agent, commit, deadline) => write(k, 'post_job',
     [jid, agent, REPO, commit, 'npm test', ['has tests'], deadline, ['README.md'], '']);
@@ -103,6 +105,20 @@ async function main() {
   check('a real job can still use that artifact', reuse.ok, `exec=${reuse.exec}`);
 
   // ---------------------------------------------------------------
+  console.log('\n=== FIX 1b: accepted jobs encumber stake ===');
+  const enc = 'enc-' + Date.now();
+  const pe = await post('issuer', enc, A.other, 'enccommit' + Date.now(), far);
+  check('job posted for the second agent', pe.ok, `exec=${pe.exec}`);
+  const ace = await write('other', 'accept_job', [enc]);
+  check('second agent accepts', ace.ok, `exec=${ace.exec}`);
+  const orec0 = await j('other', 'get_agent', [A.other]);
+  check('open obligation is tracked on-chain', orec0.open_jobs === 1, JSON.stringify(orec0));
+  const encW = await write('other', 'request_withdraw', [1000000000000000000]);
+  check('cannot withdraw stake backing an accepted job', encW.exec !== 'SUCCESS', `exec=${encW.exec}`);
+  const encD = await write('other', 'deactivate', []);
+  check('cannot deactivate with an accepted job open', encD.exec !== 'SUCCESS', `exec=${encD.exec}`);
+
+  // ---------------------------------------------------------------
   console.log('\n=== FIX 3: safe withdrawal ===');
   const floor = await write('agent', 'request_withdraw', [3000000000000000000]);
   check('active agent cannot withdraw below minimum stake', floor.exec !== 'SUCCESS', `exec=${floor.exec}`);
@@ -142,6 +158,8 @@ async function main() {
   const orec = await j('other', 'get_agent', [A.other]);
   console.log(`  other agent -> ${JSON.stringify(orec)}`);
   check('no slash before deadline', orec.slashed_count === 0, JSON.stringify(orec));
+  // two jobs were accepted by this agent, so the counter must read 2
+  check('both accepted obligations still open', orec.open_jobs === 2, JSON.stringify(orec));
 
   console.log(`\n=== RESULT: ${pass} passed, ${fail} failed ===`);
   console.log(`NOTE: the live slash/dispose leg needs an expired deadline, which`);
